@@ -1,0 +1,5 @@
+Need to create a Plan for Project which will:
+	a.Design and create DWH in SSMS
+	b.Create ETL SSIS Package for moving CSV data to fact and dim tables
+	c.All questiopns are answered and stored in table.
+	d.Do a thorough Testing and Validation and store it as well in Tables.
