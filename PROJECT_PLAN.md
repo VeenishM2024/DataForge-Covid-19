@@ -1,318 +1,273 @@
 # DataForge Covid-19 — Project Plan
 
-**Source Dataset:** Our World in Data (OWID) `owid-covid-data.csv`  
-**Stack:** SQL Server (SSMS), SSIS, T-SQL  
-**Objective:** Build a production-style DWH pipeline that ingests raw COVID-19 data, structures it into fact/dimension tables, answers 10 analytical questions, and validates the entire pipeline with stored results.
+## Context
+
+This project builds a production-style Data Warehouse pipeline for the **Our World in Data (OWID) Covid-19 dataset** (`owid-covid-data.csv`, ~429K rows, 65 columns, country-date grain). The goal is to demonstrate end-to-end DWH and ETL skills: schema design in SQL Server, automated data loading via SSIS, analytical query layers answering 10 defined business questions, and a structured testing/validation framework.
 
 ---
 
-## Dataset Overview
+## Dataset Quick Reference
 
-The CSV contains ~67 columns per country-date row including:
-
-| Category | Key Columns |
+| Property | Detail |
 |---|---|
-| Identity | `iso_code`, `continent`, `location`, `date` |
-| Cases | `total_cases`, `new_cases`, `new_cases_smoothed` |
-| Deaths | `total_deaths`, `new_deaths`, `new_deaths_smoothed` |
-| Hospitalisation | `icu_patients`, `hosp_patients` |
-| Testing | `total_tests`, `new_tests`, `positive_rate` |
-| Vaccination | `total_vaccinations`, `people_vaccinated`, `people_fully_vaccinated`, `total_boosters` |
-| Demographics | `population`, `median_age`, `aged_65_older`, `gdp_per_capita` |
-| Health System | `hospital_beds_per_thousand`, `life_expectancy`, `human_development_index` |
-| Excess Mortality | `excess_mortality_cumulative_absolute`, `excess_mortality` |
+| File | `owid-covid-data.csv` |
+| Rows | ~429,435 |
+| Columns | 65 |
+| Grain | One row per location per date |
+| Locations | 255 (countries + OWID aggregate rows like `OWID_WRL`) |
+| Date range | Jan 2020 → latest available |
+
+**Key column groups:** iso_code, continent, location, date · new/total cases & deaths · new/total tests · vaccinations · ICU/hospital · demographics (population, gdp_per_capita, median_age, etc.) · excess mortality
 
 ---
 
-## Phases
+## Tech Stack
 
----
-
-### Phase 1 — Data Profiling & Schema Design
-
-**Goal:** Fully understand the source data and produce a signed-off DWH schema before any SQL is written.
-
-#### Tasks
-
-- [ ] **1. Profile the CSV**
-  - [ ] Count total rows, distinct countries, date range, and continents.
-  - [ ] Identify nullable columns and data types for each field.
-  - [ ] Identify all OWID aggregate rows (e.g. `location = 'World'`, `'High income'`, etc.) that must be handled separately.
-  - [ ] Document columns to be excluded from the DWH (low-fill-rate or out-of-scope).
-
-- [ ] **2. Design Dimension Tables**
-
-  | Table | Grain | Key Columns |
-  |---|---|---|
-  | `dim_location` | One row per country/region | `location_id` (surrogate), `iso_code`, `location`, `continent`, `population`, `median_age`, `aged_65_older`, `gdp_per_capita`, `hospital_beds_per_thousand`, `life_expectancy`, `human_development_index` |
-  | `dim_date` | One row per calendar date | `date_id` (surrogate), `date`, `year`, `month`, `month_name`, `quarter`, `week_number`, `day_of_week` |
-
-  - [ ] Define data types and nullability for all `dim_location` columns.
-  - [ ] Define data types and nullability for all `dim_date` columns.
-  - [ ] Define surrogate key strategy (`IDENTITY`) for both dimensions.
-  - [ ] Define unique constraints for both dimensions.
-
-- [ ] **3. Design Fact Table**
-
-  | Table | Grain | Key Columns |
-  |---|---|---|
-  | `fact_covid_daily` | One row per location per date | `fact_id`, `location_id` (FK), `date_id` (FK), `total_cases`, `new_cases`, `total_deaths`, `new_deaths`, `total_vaccinations`, `people_vaccinated`, `people_fully_vaccinated`, `total_boosters`, `icu_patients`, `hosp_patients`, `total_tests`, `new_tests`, `positive_rate`, `stringency_index`, `reproduction_rate`, `excess_mortality` |
-
-  - [ ] Define data types (`DECIMAL(18,4)` vs `BIGINT`) for every measure column.
-  - [ ] Define FK relationships to `dim_location` and `dim_date`.
-  - [ ] Define index strategy (clustered PK, non-clustered on FK columns).
-
-- [ ] **4. Design Results & Validation Tables**
-
-  | Table | Purpose |
-  |---|---|
-  | `results_analytical` | Stores the answer to each of the 10 questions |
-  | `results_validation` | Stores test case ID, description, expected value, actual value, status (PASS/FAIL), run timestamp |
-
-  - [ ] Define columns for `rpt.results_analytical` (`question_id`, `question_text`, `answer_value`, `answer_label`, `run_timestamp`).
-  - [ ] Define columns for `rpt.results_validation` (`test_id`, `test_description`, `expected_value`, `actual_value`, `status`, `run_timestamp`).
-
-- [ ] **5. Produce ERD** (entity-relationship diagram as a document or draw.io file).
-  - [ ] Include all 6 tables with columns, data types, PKs, FKs, and constraints.
-  - [ ] Review and sign off ERD before moving to Phase 2.
-
-#### Exit Criteria — Phase 1
-- [ ] CSV profiling report completed (row count, date range, null percentages per column).
-- [ ] All OWID aggregate/non-country rows identified and documented (World, continents, income bands).
-- [ ] `dim_location`, `dim_date`, `fact_covid_daily`, `results_analytical`, `results_validation` schemas finalised with data types and constraints.
-- [ ] ERD reviewed and approved.
-- [ ] Columns to be excluded from the DWH are listed with justification.
-
----
-
-### Phase 2 — DWH Build in SSMS
-
-**Goal:** Create the database, schemas, and all tables in SQL Server with correct constraints, indexes, and documentation.
-
-#### Tasks
-
-- [ ] **1. Create Database & Schemas**
-  - [ ] Create `Covid19DWH` database.
-  - [ ] Create schema `stg` (staging).
-  - [ ] Create schema `dbo` (dimensions + fact).
-  - [ ] Create schema `rpt` (results + validation).
-  - [ ] Save script as `/sql/ddl/01_create_database_and_schemas.sql`.
-
-- [ ] **2. Create Staging Table**
-  - [ ] Create `stg.covid_raw` — flat table mirroring all CSV columns as `NVARCHAR` for safe bulk load.
-  - [ ] Save script as `/sql/ddl/02_create_stg_covid_raw.sql`.
-
-- [ ] **3. Create Dimension Tables**
-  - [ ] Create `dbo.dim_location` with `IDENTITY` surrogate key and unique constraint on `iso_code + location`.
-  - [ ] Create `dbo.dim_date` with `IDENTITY` surrogate key and unique constraint on `date`.
-  - [ ] Write date generation script to pre-populate `dim_date` from `2020-01-01` to dataset end date.
-  - [ ] Run date generation script and verify row count.
-  - [ ] Save scripts as `/sql/ddl/03_create_dim_location.sql` and `/sql/ddl/04_create_dim_date.sql`.
-
-- [ ] **4. Create Fact Table**
-  - [ ] Create `dbo.fact_covid_daily` with `IDENTITY` PK, FK constraints to both dimensions.
-  - [ ] Add non-clustered indexes on `location_id` and `date_id`.
-  - [ ] Save script as `/sql/ddl/05_create_fact_covid_daily.sql`.
-
-- [ ] **5. Create Results & Validation Tables**
-  - [ ] Create `rpt.results_analytical` with columns: `question_id`, `question_text`, `answer_value`, `answer_label`, `run_timestamp`.
-  - [ ] Create `rpt.results_validation` with columns: `test_id`, `test_description`, `expected_value`, `actual_value`, `status`, `run_timestamp`.
-  - [ ] Create `rpt.etl_log` with columns: `run_id`, `run_timestamp`, `status`, `staging_rows`, `fact_rows`, `dim_location_rows`, `notes`.
-  - [ ] Save script as `/sql/ddl/06_create_rpt_tables.sql`.
-
-- [ ] **6. Write & Verify DDL Scripts**
-  - [ ] Ensure all scripts are numbered and re-runnable in order on a clean database.
-  - [ ] Test full teardown and rebuild (DROP + re-run all scripts) once to confirm.
-
-#### Exit Criteria — Phase 2
-- [ ] `Covid19DWH` database exists in SSMS with schemas `stg`, `dbo`, `rpt`.
-- [ ] All 6 tables created with correct column names, data types, nullability, and constraints.
-- [ ] `dim_date` pre-populated covering the full dataset date range.
-- [ ] FK relationships enforced between fact and both dimensions.
-- [ ] All DDL saved as `.sql` scripts (re-runnable from scratch).
-- [ ] Scripts execute without errors on a clean database.
-
----
-
-### Phase 3 — ETL via SSIS
-
-**Goal:** Build an SSIS package that reliably loads the CSV into staging, then transforms and moves data into dimension and fact tables.
-
-#### Package Structure — `Covid19_ETL.dtsx`
-
-- [ ] **CF_01 — Truncate Staging**
-  - [ ] Add Execute SQL Task: `TRUNCATE TABLE stg.covid_raw`.
-  - [ ] Test in isolation; confirm table is empty after execution.
-
-- [ ] **CF_02 — Load Staging**
-  - [ ] Add Data Flow Task with Flat File Source pointing to `owid-covid-data.csv`.
-  - [ ] Map all CSV columns to `stg.covid_raw` (all as `NVARCHAR`).
-  - [ ] Configure error output to redirect bad rows to a flat file log.
-  - [ ] Test load; verify row count in `stg.covid_raw` matches CSV row count minus header.
-
-- [ ] **CF_03 — Load `dim_location`**
-  - [ ] Add Execute SQL Task: upsert distinct non-OWID locations from staging into `dbo.dim_location` using `MERGE`.
-  - [ ] Test; verify distinct location count.
-
-- [ ] **CF_04 — Load `dim_date`**
-  - [ ] Add Execute SQL Task: gap-fill any dates from staging not already in `dbo.dim_date`.
-  - [ ] Test; verify no missing dates after load.
-
-- [ ] **CF_05 — Load Fact Table**
-  - [ ] Add Execute SQL Task joining staging → both dims.
-  - [ ] Cast all numeric columns from `NVARCHAR` to `DECIMAL(18,4)` or `BIGINT`.
-  - [ ] Replace empty string `''` with `NULL` for all numeric columns.
-  - [ ] Exclude OWID aggregate rows (`iso_code LIKE 'OWID_%'`) — route them to `stg.covid_aggregates`.
-  - [ ] Apply dedup guard using `WHERE NOT EXISTS` or `MERGE` on `(location_id, date_id)`.
-  - [ ] Test; verify fact row count and spot-check a sample country.
-
-- [ ] **CF_06 — Log Run**
-  - [ ] Add Execute SQL Task: insert row into `rpt.etl_log` with run timestamp, row counts, and status.
-  - [ ] Test; verify `rpt.etl_log` has one new row per run.
-
-- [ ] **Transformation Rules Verification**
-  - [ ] Confirm no negative `total_cases` or `total_deaths` after load.
-  - [ ] Confirm `stg.covid_aggregates` contains OWID aggregate rows and fact does not.
-  - [ ] Confirm all numeric NULLs are `NULL` (not `0` or empty string) in fact.
-
-- [ ] **End-to-End Package Test**
-  - [ ] Run full package once on clean DB; confirm all 6 tasks succeed.
-  - [ ] Run package a second time; confirm no duplicate rows added to fact (idempotency check).
-  - [ ] Save package to `/ssis/Covid19_ETL.dtsx`.
-
-#### Exit Criteria — Phase 3
-- [ ] SSIS package executes end-to-end without errors or warnings on a full CSV load.
-- [ ] `stg.covid_raw` row count matches CSV row count (minus header).
-- [ ] `dbo.dim_location` contains the correct number of distinct countries/regions (non-OWID rows only).
-- [ ] `dbo.fact_covid_daily` row count matches staging row count for non-aggregate rows.
-- [ ] Re-running the package produces no duplicate rows in the fact table.
-- [ ] OWID aggregate rows are isolated in `stg.covid_aggregates`.
-- [ ] `rpt.etl_log` records each run with timestamp and row counts.
-- [ ] Package is saved and runnable from SSIS Catalog or file system.
-
----
-
-### Phase 4 — Analytical Query Layer
-
-**Goal:** Write T-SQL stored procedures that answer all 10 questions and persist results into `rpt.results_analytical`.
-
-#### Query Map
-
-| Question | Approach |
+| Layer | Tool |
 |---|---|
-| Q1 — Total worldwide cases | `MAX(total_cases)` for `location = 'World'` in staging aggregates, or `SUM` of latest country snapshots from fact |
-| Q2 — Total worldwide deaths | Same pattern as Q1 using `total_deaths` |
-| Q3 — Country with most cases | `TOP 1` by `MAX(total_cases)` grouped by `location`, excluding aggregates |
-| Q4 — Country with fewest cases | `TOP 1` by `MAX(total_cases)` grouped by `location`, excluding zero-data rows |
-| Q5 — Number of countries in dataset | `COUNT(DISTINCT location_id)` in `dim_location` |
-| Q6 — Deadliest year | `SUM(new_deaths)` grouped by `year` via `dim_date` join |
-| Q7 — Continent with most deaths | `SUM(new_deaths)` grouped by `continent` via `dim_location` join |
-| Q8 — People fully vaccinated globally | `MAX(people_fully_vaccinated)` from OWID `World` aggregate row |
-| Q9 — Country that started vaccinating first | `MIN(date)` where `new_vaccinations > 0`, grouped by `location` |
-| Q10 — Highest single-day new case count | `TOP 1` by `new_cases` across entire fact table |
-
-#### Tasks
-
-- [ ] **Write individual stored procedures (Q01–Q10)**
-  - [ ] `rpt.usp_Q01` — Total worldwide cases.
-  - [ ] `rpt.usp_Q02` — Total worldwide deaths.
-  - [ ] `rpt.usp_Q03` — Country with most cases.
-  - [ ] `rpt.usp_Q04` — Country with fewest cases.
-  - [ ] `rpt.usp_Q05` — Number of countries in dataset.
-  - [ ] `rpt.usp_Q06` — Deadliest year.
-  - [ ] `rpt.usp_Q07` — Continent with most deaths.
-  - [ ] `rpt.usp_Q08` — People fully vaccinated globally.
-  - [ ] `rpt.usp_Q09` — Country that started vaccinating first.
-  - [ ] `rpt.usp_Q10` — Highest single-day new case count.
-
-- [ ] **Write master stored procedure**
-  - [ ] `rpt.usp_Run_All_Questions` — calls Q01–Q10 in sequence and upserts each result into `rpt.results_analytical`.
-
-- [ ] **Cross-verify results**
-  - [ ] Spot-check Q1 (total cases) against OWID published summary.
-  - [ ] Spot-check Q2 (total deaths) against OWID published summary.
-  - [ ] Spot-check Q3 (most cases country) against OWID dashboard.
-  - [ ] Spot-check Q6 (deadliest year) against known pandemic timeline.
-
-- [ ] **Save all procs** under `/sql/procs/rpt.usp_Q*.sql` and `/sql/procs/rpt.usp_Run_All_Questions.sql`.
-
-#### Exit Criteria — Phase 4
-- [ ] All 10 stored procedures created and execute without errors.
-- [ ] `rpt.results_analytical` contains one row per question after running `usp_Run_All_Questions`.
-- [ ] Results are manually cross-verified against OWID's published summary statistics (spot-check at least Q1, Q2, Q3, Q6).
-- [ ] `run_timestamp` is populated so results are traceable to a specific ETL run.
+| Database | SQL Server (SSMS) |
+| ETL | SSIS (Visual Studio / SSDT) |
+| Query/Logic | T-SQL stored procedures |
+| Source control | Git (this repo) |
 
 ---
 
-### Phase 5 — Testing & Validation
+## Database Design
 
-**Goal:** Systematically verify data quality, ETL correctness, and analytical accuracy, with all outcomes persisted to `rpt.results_validation`.
+**Database name:** `Covid19DWH`
 
-#### Tasks
+**Schemas:**
+- `stg` — raw staging (all-NVARCHAR flat load, disposable)
+- `dbo` — dimension and fact tables
+- `rpt` — analytical results and validation output
 
-- [ ] **T1 — Row Count Validation**
-  - [ ] Test: Staging row count = CSV row count (minus header).
-  - [ ] Test: Fact row count = staging row count for non-OWID-aggregate rows.
-  - [ ] Test: `dim_location` distinct count matches expected country count.
+**Tables:**
 
-- [ ] **T2 — Referential Integrity**
-  - [ ] Test: No orphaned `location_id` in fact (every FK resolves to `dim_location`).
-  - [ ] Test: No orphaned `date_id` in fact (every FK resolves to `dim_date`).
+| Table | Schema | Purpose |
+|---|---|---|
+| `covid_raw` | `stg` | Flat load of every CSV row, all NVARCHAR |
+| `covid_aggregates` | `stg` | OWID synthetic rows (iso_code starts with `OWID_`) routed here, NOT to fact |
+| `dim_location` | `dbo` | One row per unique location with demographic attributes |
+| `dim_date` | `dbo` | Calendar dimension covering full date range |
+| `fact_covid_daily` | `dbo` | Daily metrics per location (FK to both dims) |
+| `results_analytical` | `rpt` | Stored proc output — answers to Q01–Q10 |
+| `results_validation` | `rpt` | Test results — pass/fail rows with counts and messages |
 
-- [ ] **T3 — Null / Data Quality**
-  - [ ] Test: `total_cases` is never negative in fact.
-  - [ ] Test: `new_cases` for a given date ≤ `total_cases` for that date.
-  - [ ] Test: Date range in fact spans `2020-01-01` to the expected end date.
-  - [ ] Test: No duplicate `(location_id, date_id)` pairs in fact.
-
-- [ ] **T4 — Analytical Sanity Checks**
-  - [ ] Test: Q1 worldwide total cases > 600 million (known lower bound).
-  - [ ] Test: Q2 worldwide total deaths > 6 million (known lower bound).
-  - [ ] Test: Q3 most-cases country is United States or China.
-  - [ ] Test: Q6 deadliest year is 2021 or 2022.
-  - [ ] Test: Q9 first vaccination country is United Kingdom or USA (December 2020).
-
-- [ ] **T5 — ETL Idempotency**
-  - [ ] Test: Run SSIS package twice; fact table row count does not increase on second run.
-
-- [ ] **Write `rpt.usp_Run_All_Tests`**
-  - [ ] Implement all T1–T5 test cases as parameterised checks inside the proc.
-  - [ ] Each test evaluates expected vs actual and writes `PASS` or `FAIL` to `rpt.results_validation`.
-  - [ ] Save as `/sql/procs/rpt.usp_Run_All_Tests.sql`.
-
-- [ ] **Run all tests and review results**
-  - [ ] Execute `rpt.usp_Run_All_Tests` on clean load.
-  - [ ] Confirm all rows in `rpt.results_validation` show `status = 'PASS'`.
-  - [ ] Document root cause and resolution for any `FAIL` result.
-  - [ ] Export final validation result set to CSV or screenshot from SSMS.
-
-#### Exit Criteria — Phase 5
-- [ ] All T1–T5 test cases implemented in `usp_Run_All_Tests`.
-- [ ] All tests PASS on a clean load.
-- [ ] `rpt.results_validation` contains one row per test case with `status`, `expected_value`, `actual_value`, and `run_timestamp`.
-- [ ] Any FAIL result has a documented root cause and resolution.
-- [ ] Idempotency test (T5) confirmed PASS.
-- [ ] Final validation report exported (query result to CSV or printed from SSMS).
+**Star schema:** `fact_covid_daily` → `dim_location` (location_key) + `dim_date` (date_key)
 
 ---
 
-## Deliverables Summary
+## SSIS Package Design
 
-| Deliverable | Location |
+**Package:** `Covid19_ETL.dtsx`
+
+| Task ID | Task Name | Description |
+|---|---|---|
+| CF_01 | Truncate Staging | Execute SQL: TRUNCATE stg.covid_raw, stg.covid_aggregates |
+| CF_02 | Load CSV to Staging | Flat File Source → OLE DB Destination (stg.covid_raw) — all NVARCHAR |
+| CF_03 | Route OWID Aggregates | INSERT into stg.covid_aggregates WHERE iso_code LIKE 'OWID\_%'; DELETE from stg.covid_raw |
+| CF_04 | Load dim_location | Execute SQL: INSERT/MERGE from stg.covid_raw (deduplicated by location) |
+| CF_05 | Load dim_date | Execute SQL: INSERT/MERGE date range from MIN(date) to MAX(date) in staging |
+| CF_06 | Load fact_covid_daily | Execute SQL: INSERT from stg.covid_raw with CAST/CONVERT + FK lookups; MERGE dedup guard |
+| CF_07 | Log ETL Run | Insert run metadata (timestamp, row counts, status) to rpt.results_validation |
+
+---
+
+## Analytical Questions & Stored Procedure Mapping
+
+| Q# | Question | Stored Proc | Key Logic |
+|---|---|---|---|
+| Q01 | Total worldwide COVID cases | `rpt.usp_Q01_TotalWorldCases` | MAX(total_cases) WHERE location = 'World' |
+| Q02 | Total worldwide deaths | `rpt.usp_Q02_TotalWorldDeaths` | MAX(total_deaths) WHERE location = 'World' |
+| Q03 | Country with most cases | `rpt.usp_Q03_MostCasesCountry` | MAX(total_cases) per location, TOP 1 |
+| Q04 | Country with fewest cases | `rpt.usp_Q04_FewestCasesCountry` | MIN(total_cases) per location WHERE total_cases > 0, TOP 1 |
+| Q05 | Number of countries in dataset | `rpt.usp_Q05_CountryCount` | COUNT(DISTINCT location) from dim_location WHERE is_aggregate = 0 |
+| Q06 | Deadliest year of the pandemic | `rpt.usp_Q06_DeadliestYear` | SUM(new_deaths) GROUP BY YEAR(date), TOP 1 |
+| Q07 | Continent with most deaths | `rpt.usp_Q07_DeadliestContinent` | SUM(new_deaths) GROUP BY continent, TOP 1 |
+| Q08 | People fully vaccinated globally | `rpt.usp_Q08_GlobalFullyVaccinated` | MAX(people_fully_vaccinated) WHERE location = 'World' |
+| Q09 | Country that vaccinated first | `rpt.usp_Q09_FirstVaccinatingCountry` | MIN(date) WHERE new_vaccinations > 0 per country, TOP 1 |
+| Q10 | Highest single-day new case count | `rpt.usp_Q10_PeakDailyNewCases` | MAX(new_cases) globally across all country rows |
+
+**Master proc:** `rpt.usp_Run_All_Questions` — calls Q01–Q10 and inserts each answer into `rpt.results_analytical` (question_id, question_text, answer_value, answer_label, run_timestamp).
+
+---
+
+## File/Folder Structure
+
+```
+/DataForge Covid-19
+  /sql
+    /ddl
+      01_create_database.sql
+      02_create_stg_tables.sql
+      03_create_dim_tables.sql
+      04_create_fact_table.sql
+      05_create_rpt_tables.sql
+    /stored_procs
+      Q01_TotalWorldCases.sql
+      Q02_TotalWorldDeaths.sql
+      Q03_MostCasesCountry.sql
+      Q04_FewestCasesCountry.sql
+      Q05_CountryCount.sql
+      Q06_DeadliestYear.sql
+      Q07_DeadliestContinent.sql
+      Q08_GlobalFullyVaccinated.sql
+      Q09_FirstVaccinatingCountry.sql
+      Q10_PeakDailyNewCases.sql
+      Run_All_Questions.sql
+    /validation
+      run_validation_suite.sql
+  /ssis
+    Covid19_ETL.dtsx
+  /docs
+    ERD.png
+  PROJECT_PLAN.md
+  Requirement.txt
+  Covid-19 Questions.txt
+  owid-covid-data.csv
+```
+
+---
+
+## Phase 1 — Data Profiling & Schema Design
+
+### Tasks
+- [ ] Profile the CSV: identify NULL%, data type, min/max, distinct count for each of the 65 columns
+- [ ] Identify which columns go to `dim_location` (static per-country attributes) vs `fact_covid_daily` (daily metrics)
+- [ ] Confirm OWID aggregate rows (iso_code LIKE 'OWID_%') and how to handle them
+- [ ] Design and draw the star schema ERD (`/docs/ERD.png`)
+- [ ] Write DDL scripts for all 7 tables (under `/sql/ddl/`)
+- [ ] Peer-review DDL — verify data types, NULLability, PKs, FKs, indexes
+- [ ] Commit DDL scripts to git
+
+### Exit Criteria
+- [ ] ERD diagram exists at `/docs/ERD.png` showing all 7 tables with PKs, FKs, and column names
+- [ ] All 5 DDL `.sql` files exist and are syntactically valid (parse without error in SSMS)
+- [ ] `dim_location` column list is finalized with correct source-column mapping
+- [ ] `fact_covid_daily` column list is finalized covering all 10 question-relevant metrics
+- [ ] OWID aggregate handling strategy is documented in a comment in `02_create_stg_tables.sql`
+
+---
+
+## Phase 2 — DWH Database Build in SSMS
+
+### Tasks
+- [ ] Execute `01_create_database.sql` — creates `Covid19DWH` database with `stg`, `dbo`, `rpt` schemas
+- [ ] Execute `02_create_stg_tables.sql` — creates `stg.covid_raw` and `stg.covid_aggregates`
+- [ ] Execute `03_create_dim_tables.sql` — creates `dbo.dim_location` and `dbo.dim_date`
+- [ ] Execute `04_create_fact_table.sql` — creates `dbo.fact_covid_daily` with FK constraints
+- [ ] Execute `05_create_rpt_tables.sql` — creates `rpt.results_analytical` and `rpt.results_validation`
+- [ ] Verify all objects in SSMS Object Explorer
+- [ ] Run a quick sanity SELECT on each empty table to confirm schema matches ERD
+
+### Exit Criteria
+- [ ] `Covid19DWH` database exists in SQL Server with schemas `stg`, `dbo`, `rpt`
+- [ ] All 7 tables exist with correct columns, data types, and constraints
+- [ ] `SELECT * FROM <each_table>` returns 0 rows with no error (empty tables, schema confirmed)
+- [ ] FK constraints on `fact_covid_daily` reference `dim_location` and `dim_date`
+- [ ] All DDL scripts are committed to `/sql/ddl/` in git
+
+---
+
+## Phase 3 — ETL Pipeline via SSIS
+
+### Tasks
+- [ ] Create SSIS project in Visual Studio (SSDT) and add `Covid19_ETL.dtsx` package
+- [ ] Configure OLE DB Connection Manager pointing to `Covid19DWH`
+- [ ] Configure Flat File Connection Manager for `owid-covid-data.csv` (header row, comma delimiter)
+- [ ] Build CF_01: Execute SQL Task — TRUNCATE `stg.covid_raw`, `stg.covid_aggregates`
+- [ ] Build CF_02: Data Flow Task — Flat File Source → OLE DB Destination (`stg.covid_raw`), all columns NVARCHAR
+- [ ] Build CF_03: Execute SQL Task — route OWID rows to `stg.covid_aggregates`, delete from `stg.covid_raw`
+- [ ] Build CF_04: Execute SQL Task — MERGE/INSERT into `dbo.dim_location` from distinct location rows
+- [ ] Build CF_05: Execute SQL Task — populate `dbo.dim_date` for the full date range in staging
+- [ ] Build CF_06: Execute SQL Task — INSERT into `dbo.fact_covid_daily` with CAST/CONVERT + MERGE dedup guard
+- [ ] Build CF_07: Execute SQL Task — log run metadata to `rpt.results_validation`
+- [ ] Run full package end-to-end; fix any cast errors or truncation issues
+- [ ] Commit `.dtsx` file to `/ssis/` in git
+
+### Exit Criteria
+- [ ] SSIS package runs to completion with no red X tasks (all tasks green checkmarks)
+- [ ] `SELECT COUNT(*) FROM stg.covid_raw` ≈ 429,435 (all source rows loaded)
+- [ ] `SELECT COUNT(*) FROM stg.covid_aggregates` > 0 (OWID rows correctly routed)
+- [ ] `SELECT COUNT(*) FROM dbo.dim_location` = 255 (one row per unique location)
+- [ ] `SELECT COUNT(*) FROM dbo.dim_date` covers the full date range in the source file
+- [ ] `SELECT COUNT(*) FROM dbo.fact_covid_daily` ≈ total non-OWID country-date rows
+- [ ] Running the package a second time produces **identical row counts** (idempotency confirmed)
+- [ ] No NULL `location_key` or `date_key` in `fact_covid_daily`
+
+---
+
+## Phase 4 — Analytical Query Layer
+
+### Tasks
+- [ ] Write and test `rpt.usp_Q01_TotalWorldCases`
+- [ ] Write and test `rpt.usp_Q02_TotalWorldDeaths`
+- [ ] Write and test `rpt.usp_Q03_MostCasesCountry`
+- [ ] Write and test `rpt.usp_Q04_FewestCasesCountry`
+- [ ] Write and test `rpt.usp_Q05_CountryCount`
+- [ ] Write and test `rpt.usp_Q06_DeadliestYear`
+- [ ] Write and test `rpt.usp_Q07_DeadliestContinent`
+- [ ] Write and test `rpt.usp_Q08_GlobalFullyVaccinated`
+- [ ] Write and test `rpt.usp_Q09_FirstVaccinatingCountry`
+- [ ] Write and test `rpt.usp_Q10_PeakDailyNewCases`
+- [ ] Write `rpt.usp_Run_All_Questions` (calls Q01–Q10, inserts to `rpt.results_analytical`)
+- [ ] Execute master proc and verify 10 rows in `rpt.results_analytical`
+- [ ] Spot-check 3+ answers against public data (WHO, OWID website)
+- [ ] Commit all stored proc `.sql` files to `/sql/stored_procs/` in git
+
+### Exit Criteria
+- [ ] All 10 individual stored procs exist and execute without error
+- [ ] `EXEC rpt.usp_Run_All_Questions` inserts exactly 10 rows into `rpt.results_analytical`
+- [ ] `SELECT * FROM rpt.results_analytical` shows a non-NULL, non-zero answer for all 10 questions
+- [ ] Q01 answer is in the hundreds of millions range (plausibility check)
+- [ ] Q02 answer is in the millions range (plausibility check)
+- [ ] Q09 answer is a date in late 2020 or early 2021
+- [ ] Running master proc a second time does NOT create duplicate rows
+- [ ] All stored proc files committed to git
+
+---
+
+## Phase 5 — Testing & Validation
+
+### Test Categories
+
+| Category | Description |
 |---|---|
-| Project Plan | `PROJECT_PLAN.md` |
-| DDL Scripts | `/sql/ddl/*.sql` |
-| ETL SSIS Package | `/ssis/Covid19_ETL.dtsx` |
-| Analytical Stored Procs | `/sql/procs/rpt.usp_Q*.sql` |
-| Validation Stored Proc | `/sql/procs/rpt.usp_Run_All_Tests.sql` |
-| Results (live in DB) | `rpt.results_analytical`, `rpt.results_validation` |
+| Row Count | Verify staging, dim, and fact row counts match expectations |
+| Referential Integrity | No orphan FKs in fact_covid_daily |
+| Data Quality | No all-NULL records in fact; dates in valid range; no future dates |
+| Analytical Sanity | Cross-check SUM(new_cases) in fact vs MAX(total_cases) in OWID World row |
+| Idempotency | Re-run SSIS + master proc; counts and answers must be identical |
+
+### Tasks
+- [ ] Write `/sql/validation/run_validation_suite.sql` with one test case per assertion
+- [ ] Row count test: `stg.covid_raw` count = expected total
+- [ ] Row count test: `dim_location` count = distinct location count in staging
+- [ ] Row count test: `fact_covid_daily` count = staging minus OWID rows
+- [ ] RI test: LEFT JOIN fact → dim_location WHERE dim key IS NULL = 0
+- [ ] RI test: LEFT JOIN fact → dim_date WHERE dim key IS NULL = 0
+- [ ] Data quality test: no row in fact WHERE date > GETDATE()
+- [ ] Data quality test: MIN(date) in fact ≥ '2020-01-01'
+- [ ] Analytical sanity test: SUM(new_cases) in fact ≈ OWID World total_cases (within 1%)
+- [ ] Idempotency test: run SSIS twice, assert row counts unchanged
+- [ ] Insert all results (test_name, status PASS/FAIL, actual_value, expected_value, run_timestamp) into `rpt.results_validation`
+- [ ] Commit validation script to git
+
+### Exit Criteria
+- [ ] Validation script runs end-to-end without unhandled errors
+- [ ] `SELECT * FROM rpt.results_validation WHERE status = 'FAIL'` returns 0 rows
+- [ ] All 5 test categories have at least one PASS recorded in `rpt.results_validation`
+- [ ] Idempotency test explicitly recorded as PASS
+- [ ] Validation script committed to `/sql/validation/` in git
 
 ---
 
-## Definition of Done
+## Overall Project Completion Checklist
 
-- [ ] SSIS package loads the full CSV end-to-end without errors.
-- [ ] All 10 questions have answers stored in `rpt.results_analytical`.
-- [ ] All validation tests in `rpt.results_validation` show status = `PASS`.
-- [ ] Re-running the pipeline from scratch (truncate → reload) produces identical results.
-- [ ] All SQL scripts are saved and re-runnable in order on a clean `Covid19DWH` database.
+- [ ] Phase 1 — Data Profiling & Schema Design: all exit criteria met
+- [ ] Phase 2 — DWH Build in SSMS: all exit criteria met
+- [ ] Phase 3 — ETL via SSIS: all exit criteria met
+- [ ] Phase 4 — Analytical Query Layer: all exit criteria met
+- [ ] Phase 5 — Testing & Validation: all exit criteria met
+- [ ] All SQL scripts, SSIS package, and ERD committed to git
+- [ ] Final `git log` shows clean commit history with at least one commit per phase
