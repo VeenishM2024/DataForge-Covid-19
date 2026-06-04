@@ -1,5 +1,15 @@
 Need to create a Plan for Project which will:
-	a.Design and create DWH in SSMS
-	b.Create ETL SSIS Package for moving CSV data to fact and dim tables
-	c.All questiopns are answered and stored in table.
-	d.Do a thorough Testing and Validation and store it as well in Tables.
+	a. Design and create a Covid-19 DWH schema in SQL Server to store profiled, cleaned data from OWID CSV.
+	b. Create an SSIS ETL package to move CSV data through staging into DWH dimensions and fact table.
+	c. ETL transformation must fix raw data problems found in CSV before loading into the fact table:
+		i.   Some columns are mostly empty -- decide which ones to keep and which to skip.
+		ii.  Some number columns have blank text instead of NULL -- replace blank with NULL before saving.
+		iii. Some rows have negative case or death counts -- keep them, they are valid data corrections.
+		iv.  Some number columns have text like N/A instead of a number -- treat those as NULL.
+		v.   Check all dates are in the correct format and remove any future or very old dates.
+		vi.  Rows that represent world totals (iso_code starts with OWID_) must go to a separate table.
+		vii. Make sure each country appears only once in the location table, no repeat rows.
+		viii.Make sure running the ETL twice does not create duplicate rows in the fact table.
+	d. ETL must be designed so clean fact data directly answers all 10 analytical questions (Q01-Q10).
+	e. Design a test framework that validates row counts, referential integrity, date range, duplicates,
+	   and analytical sanity.
