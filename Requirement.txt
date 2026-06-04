@@ -11,5 +11,4 @@ Need to create a Plan for Project which will:
 		vii. Make sure each country appears only once in the location table, no repeat rows.
 		viii.Make sure running the ETL twice does not create duplicate rows in the fact table.
 	d. ETL must be designed so clean fact data directly answers all 10 analytical questions (Q01-Q10).
-	e. Design a test framework that validates row counts, referential integrity, date range, duplicates,
-	   and analytical sanity.
+	e. Design a test framework, which ensure the quality of data flowing csv to tables.
