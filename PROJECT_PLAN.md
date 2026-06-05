@@ -55,33 +55,231 @@ DataForge Covid-19/
 ## Architecture Overview
 
 ```
-owid-covid-data.csv
-        │
-        ▼
-┌─────────────────────────────────────────────────────────┐
-│  CF_02  Data Flow Task  (SSIS — all transformation here) │
-│                                                          │
-│  Flat File Source                                        │
-│      │                                                   │
-│      ▼                                                   │
-│  Conditional Split ── [IsOWID / DQ-09] ──► stg.covid_aggregates │
-│      │ [NotOWID]                                         │
-│      ▼                                                   │
-│  Conditional Split ── [InvalidDate / DQ-05] ──► dq_rejected_rows │
-│      │ [ValidDate]                                        │
-│      ▼                                                   │
-│  Derived Column  (DQ-02: blank→NULL, DQ-04: N/A→NULL)   │
-│      │                                                   │
-│      ▼                                                   │
-│  OLE DB Destination → stg.fact_stage                    │
-└─────────────────────────────────────────────────────────┘
-        │
-        ▼
-CF_03  MERGE → dbo.dim_location   (from stg.fact_stage)
-CF_04  INSERT → dbo.dim_date      (from stg.fact_stage, DQ-06)
-CF_05  MERGE → dbo.fact_covid_daily (TRY_CAST = DQ-CAST, MERGE = DQ-10)
-CF_06  Update etl_run_log
+  SOURCE                  ETL LAYER                     DATA WAREHOUSE — Covid19DWH
+  ──────────────────────  ────────────────────────────  ──────────────────────────────────────
+
+  owid-covid-data.csv     SSIS: Covid19_ETL.dtsx        ┌─── stg schema (temporary buffer) ───┐
+  · 429,000 rows     ──►  · Reads CSV once              │  stg.fact_stage    (all NVARCHAR)    │
+  · 65 columns            · Applies 10 DQ rules   ────► │  stg.covid_aggregates (OWID rows)   │
+  · country × day         · Routes bad/OWID rows        └──────────────────────────────────────┘
+                          · Writes clean rows                          │
+                          · Logs every run                             ▼
+                                    │               ┌─── dbo schema (permanent, typed) ─────────┐
+                                    │               │  dim_location       ~250 rows              │
+                                    └─────────────► │  dim_date           ~1,400 rows            │
+                                                    │  fact_covid_daily   ~400,000 rows          │
+                                    ┌─────────────► │    └─ partitioned by year (2020–2026+)     │
+                                    │               │  dq_rejected_rows   (DQ audit trail)       │
+                         Bad rows ──┘               │  etl_run_log        (run-by-run counts)    │
+                                                    └────────────────────────────────────────────┘
+                                                                       │
+                                                    ┌─── rpt schema (results) ──────────────────┐
+  CONSUMERS               ANALYTICAL LAYER          │  results_analytical   Q01–Q10 answers      │
+  ──────────────────────  ────────────────────────  │  results_validation   11-check test log    │
+  Business Questions  ──► Q01–Q10 Stored Procs ──► │                                            │
+  Quality Gate        ──► usp_verify_etl_load  ──► │                                            │
+                                                    └────────────────────────────────────────────┘
 ```
+
+---
+
+## DWH Design
+
+### Star Schema (ERD)
+
+```
+                    ┌──────────────────────────────────┐
+                    │         dbo.dim_location          │
+                    │──────────────────────────────────│
+                    │ PK  location_key      INT IDENTITY│
+                    │     iso_code          NVARCHAR(10)│
+                    │     continent         NVARCHAR(50)│
+                    │     location          NVARCHAR(100)│
+                    │     population        FLOAT       │
+                    │     population_density FLOAT      │
+                    │     median_age        FLOAT       │
+                    │     aged_65_older     FLOAT       │
+                    │     aged_70_older     FLOAT       │
+                    │     gdp_per_capita    FLOAT       │
+                    │     extreme_poverty   FLOAT       │
+                    │     cardiovasc_death_rate FLOAT   │
+                    │     diabetes_prevalence   FLOAT   │
+                    │     female_smokers    FLOAT       │
+                    │     male_smokers      FLOAT       │
+                    │     handwashing_facilities FLOAT  │
+                    │     hospital_beds_per_thousand FLOAT│
+                    │     life_expectancy   FLOAT       │
+                    │     human_development_index FLOAT │
+                    └──────────────┬───────────────────┘
+                                   │ 1
+                                   │
+                                   │ N
+          ┌────────────────────────▼────────────────────────────────┐
+          │                  dbo.fact_covid_daily                    │
+          │──────────────────────────────────────────────────────── │
+          │ PK  fact_id                  BIGINT IDENTITY             │
+          │ FK  location_key             INT  → dim_location         │
+          │ FK  date_key                 INT  → dim_date (YYYYMMDD)  │
+          │     total_cases              FLOAT                       │
+          │     new_cases                FLOAT                       │
+          │     total_deaths             FLOAT                       │
+          │     new_deaths               FLOAT                       │
+          │     people_fully_vaccinated  FLOAT                       │
+          │     total_vaccinations       FLOAT                       │
+          │     new_vaccinations         FLOAT                       │
+          │     people_vaccinated        FLOAT                       │
+          │     total_boosters           FLOAT                       │
+          │     total_tests              FLOAT                       │
+          │     new_tests                FLOAT                       │
+          │     positive_rate            FLOAT                       │
+          │     stringency_index         FLOAT                       │
+          │     reproduction_rate        FLOAT                       │
+          │ UNIQUE (location_key, date_key)   ← DQ-10               │
+          │ Clustered Index on (date_key, location_key)              │
+          │ Partitioned by ps_covid_year (on date_key)               │
+          └────────────────────────┬────────────────────────────────┘
+                                   │ N
+                                   │
+                                   │ 1
+                    ┌──────────────▼───────────────────┐
+                    │          dbo.dim_date             │
+                    │──────────────────────────────────│
+                    │ PK  date_key   INT  (YYYYMMDD)    │
+                    │     full_date  DATE                │
+                    │     year       SMALLINT            │
+                    │     month      TINYINT             │
+                    │     day        TINYINT             │
+                    │     month_name NVARCHAR(10)        │
+                    │     quarter    TINYINT             │
+                    │     day_of_week TINYINT            │
+                    └──────────────────────────────────┘
+```
+
+**Grain:** One row per (country × calendar day) in `fact_covid_daily`.  
+**Cardinality:** ~200–250 locations × ~1,400 dates ≈ 300,000+ fact rows.
+
+---
+
+### All Table Definitions
+
+#### `stg.fact_stage` — SSIS landing buffer
+| Column | Type | Notes |
+|---|---|---|
+| iso_code | NVARCHAR(10) | |
+| continent | NVARCHAR(50) | |
+| location | NVARCHAR(100) | |
+| date | NVARCHAR(20) | Raw string; validated by DQ-05 |
+| total_cases–reproduction_rate (all 15 metrics) | NVARCHAR(50) each | All NVARCHAR — TRY_CAST in CF_05 |
+| population–human_development_index (all 15 demographics) | NVARCHAR(50) each | All NVARCHAR — TRY_CAST in CF_03 |
+
+#### `stg.covid_aggregates` — OWID rows (DQ-09 route)
+Same column set as `stg.fact_stage` — iso_code always starts with `OWID_`.
+
+#### `dbo.dim_location`
+| Column | Type | Constraint |
+|---|---|---|
+| location_key | INT IDENTITY(1,1) | PK |
+| iso_code | NVARCHAR(10) | UNIQUE NOT NULL |
+| continent | NVARCHAR(50) | NULL |
+| location | NVARCHAR(100) | NOT NULL |
+| population | FLOAT | NULL |
+| population_density | FLOAT | NULL |
+| median_age | FLOAT | NULL |
+| aged_65_older | FLOAT | NULL |
+| aged_70_older | FLOAT | NULL |
+| gdp_per_capita | FLOAT | NULL |
+| extreme_poverty | FLOAT | NULL |
+| cardiovasc_death_rate | FLOAT | NULL |
+| diabetes_prevalence | FLOAT | NULL |
+| female_smokers | FLOAT | NULL |
+| male_smokers | FLOAT | NULL |
+| handwashing_facilities | FLOAT | NULL |
+| hospital_beds_per_thousand | FLOAT | NULL |
+| life_expectancy | FLOAT | NULL |
+| human_development_index | FLOAT | NULL |
+
+#### `dbo.dim_date`
+| Column | Type | Constraint |
+|---|---|---|
+| date_key | INT | PK (YYYYMMDD format) |
+| full_date | DATE | NOT NULL |
+| year | SMALLINT | NOT NULL |
+| month | TINYINT | NOT NULL |
+| day | TINYINT | NOT NULL |
+| month_name | NVARCHAR(10) | NOT NULL |
+| quarter | TINYINT | NOT NULL |
+| day_of_week | TINYINT | NOT NULL |
+
+#### `dbo.fact_covid_daily`
+| Column | Type | Constraint |
+|---|---|---|
+| fact_id | BIGINT IDENTITY(1,1) | PK |
+| location_key | INT | FK → dim_location NOT NULL |
+| date_key | INT | FK → dim_date NOT NULL |
+| total_cases | FLOAT | NULL |
+| new_cases | FLOAT | NULL |
+| total_deaths | FLOAT | NULL |
+| new_deaths | FLOAT | NULL |
+| people_fully_vaccinated | FLOAT | NULL |
+| total_vaccinations | FLOAT | NULL |
+| new_vaccinations | FLOAT | NULL |
+| people_vaccinated | FLOAT | NULL |
+| total_boosters | FLOAT | NULL |
+| total_tests | FLOAT | NULL |
+| new_tests | FLOAT | NULL |
+| positive_rate | FLOAT | NULL |
+| stringency_index | FLOAT | NULL |
+| reproduction_rate | FLOAT | NULL |
+| UNIQUE | (location_key, date_key) | DQ-10 |
+
+Partitioned: `pf_covid_year` on `date_key` (INT), RANGE RIGHT, boundaries 20210101–20260101 → 7 partitions.  
+Clustered index on `(date_key, location_key)` aligned to `ps_covid_year`.
+
+#### `dbo.dq_rejected_rows`
+| Column | Type | Constraint |
+|---|---|---|
+| reject_id | INT IDENTITY(1,1) | PK |
+| run_id | INT | FK → etl_run_log NOT NULL |
+| rule_id | NVARCHAR(10) | NOT NULL (e.g. 'DQ-05') |
+| iso_code | NVARCHAR(10) | NULL |
+| date | NVARCHAR(20) | NULL |
+| column_name | NVARCHAR(100) | NULL |
+| raw_value | NVARCHAR(255) | NULL |
+| rejected_at | DATETIME | DEFAULT GETDATE() |
+
+#### `dbo.etl_run_log`
+| Column | Type | Constraint |
+|---|---|---|
+| run_id | INT IDENTITY(1,1) | PK |
+| run_at | DATETIME | DEFAULT GETDATE() |
+| rows_read_csv | INT | NULL |
+| rows_to_aggregates | INT | NULL |
+| rows_to_fact_stage | INT | NULL |
+| rows_rejected | INT | NULL |
+| rows_loaded_dim_loc | INT | NULL |
+| rows_loaded_dim_date | INT | NULL |
+| rows_loaded_fact | INT | NULL |
+| run_duration_sec | INT | NULL |
+| status | NVARCHAR(10) | NOT NULL — 'RUNNING'/'SUCCESS'/'FAILED'/'PARTIAL' |
+
+#### `rpt.results_analytical`
+| Column | Type | Constraint |
+|---|---|---|
+| result_id | INT IDENTITY(1,1) | PK |
+| question_id | NVARCHAR(5) | NOT NULL (e.g. 'Q01') |
+| question_text | NVARCHAR(500) | NOT NULL |
+| answer | NVARCHAR(MAX) | NULL |
+| loaded_at | DATETIME | DEFAULT GETDATE() |
+
+#### `rpt.results_validation`
+| Column | Type | Constraint |
+|---|---|---|
+| validation_id | INT IDENTITY(1,1) | PK |
+| run_id | INT | FK → etl_run_log NULL |
+| check_name | NVARCHAR(100) | NOT NULL |
+| result | NVARCHAR(10) | NOT NULL — 'PASS'/'FAIL' |
+| detail | NVARCHAR(500) | NULL |
+| checked_at | DATETIME | DEFAULT GETDATE() |
 
 ---
 
