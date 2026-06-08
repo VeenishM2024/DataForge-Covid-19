@@ -1,4 +1,4 @@
-# DataForge Covid-19 — DWH Rough Diagram
+# DataForge Covid-19 — Schema Rough Diagram
 
 ## Star Schema (Fact + Dims)
 
