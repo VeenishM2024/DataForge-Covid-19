@@ -46,27 +46,4 @@
                                     └────────────────────────────────┘
 ```
 
----
-
-## Full ETL Flow
-
-```
-owid-covid-data.csv
-        │
-        ▼
- stg.covid_raw          ← flat NVARCHAR staging (all 67 cols as-is)
-        │
-        ├──► iso_code starts with OWID_ ──► stg.covid_aggregates  (dead end)
-        │
-        ├──► MERGE on iso_code          ──► dbo.dim_location
-        │
-        ├──► date spine generate        ──► dbo.dim_date
-        │
-        └──► MERGE on (date_key,        ──► dbo.fact_covid_daily
-                        location_key)
-                             │
-                             ▼
-                  rpt.results_analytical   ← Q01–Q10 stored proc outputs
-                  rpt.results_validation   ← test pass/fail log
-```
 
