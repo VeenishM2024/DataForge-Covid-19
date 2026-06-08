@@ -13,14 +13,4 @@ Need to create a Plan for Project which will:
 	d. ETL must be designed so clean fact data directly answers all 10 analytical questions (Q01-Q10).
 	e. Design a test framework, which ensure the quality of data flowing csv to tables.
 
-	Questions I want to Answer through this Dataset:
-Q1	How many total COVID cases were recorded worldwide?
-Q2	How many total deaths were recorded worldwide?
-Q3	Which country had the most cases?
-Q4	Which country had the fewest cases?
-Q5	How many countries are in the dataset?
-Q6	What was the deadliest year of the pandemic?
-Q7	Which continent had the most deaths?
-Q8	How many people were fully vaccinated globally?
-Q9	Which country started vaccinating first?
-Q10	What was the highest single-day new case count ever recorded?
+

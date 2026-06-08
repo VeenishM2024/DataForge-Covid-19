@@ -1,0 +1,11 @@
+Tech Stack — DataForge Covid-19 DWH
+
+DEVELOPER TECH STACK
+--------------------
+These are the tools the developer uses to build, run, and manage the project.
+
+  SSMS           : SQL Server Management Studio
+ 
+  Visual Studio  : with SSDT (SQL Server Data Tools) extension
+
+  Git            : Version control

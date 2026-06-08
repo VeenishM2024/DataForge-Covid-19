@@ -1,0 +1,14 @@
+Tech Stack — DataForge Covid-19 DWH
+
+PROJECT TECH STACK
+------------------
+These are the technologies that make up the actual data warehouse system.
+
+  Database       : SQL Server 2019+
+
+  ETL            : SQL Server Integration Services (SSIS)
+
+  Query Language : T-SQL
+
+
+

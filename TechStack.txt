@@ -1,8 +1,0 @@
-Tech Stack — DataForge Covid-19 DWH
-Tools & Technologies
-Layer	Tool	Version	Purpose
-Database	SQL Server	2019+	Hosts the Covid19DWH database
-DB IDE	SSMS	Any recent	Write/run DDL, DML, stored procs
-ETL	SSIS	Visual Studio / SSDT	Reads CSV, applies DQ rules, loads warehouse
-Language	T-SQL	—	DDL, DML, stored procedures
-Version Control	Git	—	Source-control all .sql and .dtsx files
